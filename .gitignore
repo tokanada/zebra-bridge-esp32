@@ -2,5 +2,6 @@
 .vscode/
 .venv/
 .worktrees/
+.opencode/
 .DS_Store
 *.pyc
