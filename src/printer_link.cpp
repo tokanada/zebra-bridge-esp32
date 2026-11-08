@@ -194,10 +194,26 @@ void PrinterLink::txTask() {
       continue;
     }
 
-    uart_->write(buffer, pending);
-    bytesToPrinter_ += static_cast<std::uint32_t>(pending);
-    activity_ = true;
-    pending = 0;
+    // Only write what fits in the UART TX FIFO so a deasserted CTS (printer
+    // off or unplugged) never blocks this task long enough to trip the
+    // task watchdog. Unsent bytes stay in `buffer` for the next pass.
+    const int room = uart_->availableForWrite();
+    if (room <= 0) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+    const std::size_t count =
+        pending < static_cast<std::size_t>(room) ? pending
+                                                 : static_cast<std::size_t>(room);
+    const std::size_t written = uart_->write(buffer, count);
+    if (written < pending) {
+      std::memmove(buffer, buffer + written, pending - written);
+    }
+    pending -= written;
+    bytesToPrinter_ += static_cast<std::uint32_t>(written);
+    if (written > 0) {
+      activity_ = true;
+    }
   }
 }
 
