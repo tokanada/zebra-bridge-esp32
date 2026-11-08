@@ -82,6 +82,8 @@ void printHelp() {
 }
 
 void printConfig() {
+  Serial.printf("config source: %s hash 0x%08x\n", buildConfigSource(),
+                static_cast<unsigned>(buildConfigHash()));
   Serial.println("config:");
   Serial.printf("  name:    %s\n", config.name.c_str());
   Serial.printf("  serial:  %s\n", config.serial.c_str());
