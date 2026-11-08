@@ -1,0 +1,46 @@
+; zebra-bridge-esp32 build-time configuration.
+;
+; Copy this file to bridge.ini, edit it, then flash:
+;   cp bridge.ini.example bridge.ini
+;   pio run -e esp32dev -t upload      (or -e esp32c3)
+;
+; Each bridge must have a unique `name` and `serial`: phones and tablets use
+; them to tell printers apart when more than one is nearby.
+;
+; [bridge] applies to every PlatformIO environment. [esp32dev] and [esp32c3]
+; override [bridge] for that environment only. Any key that is not present
+; falls back to the compile-time default in include/board_config.h.
+;
+; Values are also stored in NVS. Re-flashing with a changed file replaces
+; console `set` changes; flashing the same file again keeps them. Use
+; `pio run -t erase` to wipe NVS completely.
+
+[bridge]
+; BLE advertised name, 1..29 printable ASCII characters.
+name = ZD421-Emulation
+; Device Information serial number, 1..32 printable ASCII characters.
+serial = ZD421-EMULATION-0001
+; Printer UART baud rate: 1200 2400 4800 9600 14400 19200 28800 38400 57600 115200
+baud = 9600
+; Flow control: none, xonxoff, or cts.
+flow = xonxoff
+; Console log level: error, info, or debug.
+log = info
+
+[esp32dev]
+; Printer UART pins (GPIO numbers). -1 disables cts and led only.
+tx = 17
+rx = 16
+; Hardware CTS pin; -1 disables CTS flow control.
+; cts = -1
+; Status LED pin; -1 disables the LED.
+; led = 2
+; LED polarity: 0 = active high, 1 = active low.
+; ledlow = 0
+
+[esp32c3]
+tx = 5
+rx = 4
+; cts = -1
+; led = 8
+; ledlow = 1

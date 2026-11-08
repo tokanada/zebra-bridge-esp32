@@ -5,3 +5,5 @@
 .opencode/
 .DS_Store
 *.pyc
+__pycache__/
+bridge.ini

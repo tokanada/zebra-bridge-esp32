@@ -77,7 +77,50 @@ GX420d TX --> MAX3232 --> printer RX task --> XON/XOFF filter --> notify
 - Serial format: configurable baud (default 9600), 8N1. Flow control modes:
   `none`, `xonxoff` (default), `cts`.
 
-## Configuration (NVS via `Preferences`, namespace `zbridge`)
+## Configuration
+
+Configuration is layered, highest priority last:
+
+1. Compile-time board defaults in `include/board_config.h`, selected by target.
+2. Build-time overrides from `bridge.ini` (`[bridge]`, plus the section named
+   after the PlatformIO env, `[esp32dev]` or `[esp32c3]`).
+3. Runtime values saved by the console in NVS (`Preferences`, namespace
+   `zbridge`).
+
+`scripts/bridge_config.py` is a PlatformIO `pre` extra script on the ESP32
+envs only (not `native`). It reads `bridge.ini` from the project root, or the
+file named by `ZB_CONFIG` (relative to the project root or absolute; a missing
+explicit file is a build error). A missing default `bridge.ini` means "no
+overrides" and prints one notice line. The file is UTF-8 with optional BOM,
+accepts CRLF, and treats `;`/`#` as comments (inline comments must follow
+whitespace).
+
+All parsing, validation, and header rendering are pure Python functions so
+`tests/test_bridge_config.py` can run them without SCons. Validation mirrors
+`console.cpp`: name 1..29 printable ASCII, serial 1..32 printable ASCII, the
+same baud list, `flow` ∈ `none|xonxoff|cts`, `log` ∈ `error|info|debug`,
+`ledlow` ∈ `0|1`, and the per-target GPIO tables (`cts`/`led` also accept
+`-1`). Any invalid value or unknown key/section stops the build with a message
+naming the file, key, and reason.
+
+The script writes `$BUILD_DIR/generated/bridge_config_gen.h` (rewritten only
+when its content changes) and adds that directory to `CPPPATH`. For each key
+present it defines `ZB_CFG_HAS_<KEY> 1` and `ZB_CFG_<KEY>` (strings as escaped
+C literals; `flow`/`log` as the integer values of `console::FlowMode` /
+`console::LogLevel`). It always defines `ZB_CFG_SOURCE` (path relative to the
+project root, or `none`) and `ZB_CFG_HASH`, the FNV-1a 32-bit hash of the
+sorted normalised `key=value\n` lines (empty-string hash when there is no
+file). `defaultConfig()` includes the header via `__has_include`, so the
+`native` build and any missing header behave as "no overrides".
+
+`ConfigStore::begin()` reads the NVS `cfghash` key (UInt). If it is absent or
+differs from `ZB_CFG_HASH`, it clears the namespace, writes the new hash, and
+logs `config: applied <source> (hash 0x...), cleared saved console settings`;
+otherwise the saved console values win. `reset-config` clears the user keys
+and then re-writes `cfghash`. `show` starts with
+`config source: <source> hash 0x........`. Flashing a changed file therefore
+resets console changes, re-flashing the same file keeps them, and
+`pio run -t erase` wipes NVS entirely.
 
 Keys: `name`, `serial`, `baud`, `flow`, `tx`, `rx`, `cts`, `led`, `ledlow`,
 `log`. Missing keys fall back to `board_config.h` defaults.
@@ -144,17 +187,20 @@ must match (`^SC9600,8,N,1,X` or via Zebra Setup Utilities).
 
 ```
 platformio.ini            envs: esp32dev, esp32c3, native (tests only)
+bridge.ini.example        documented template (bridge.ini is git-ignored)
+scripts/bridge_config.py  INI parsing/validation + header generation
 include/board_config.h    per-target defaults
 include/console.h         pure C++ command parser / validators
 include/flow_filter.h     pure C++ XON/XOFF filter state machine
 src/main.cpp              setup/loop, LED, health check
 src/ble_printer.cpp/.h    NimBLE GATT server, advertising, callbacks
 src/printer_link.cpp/.h   StreamBuffer, UART, TX/RX tasks, stats
-src/config_store.cpp/.h   Preferences load/save
+src/config_store.cpp/.h   Preferences load/save, config hash handling
 src/console.cpp           parser implementation
 src/flow_filter.cpp
 test/test_console/        Unity tests for parser/validators
 test/test_flow_filter/    Unity tests for XON/XOFF filter
+tests/test_bridge_config.py  pytest tests for the build-time config
 README.md
 ```
 

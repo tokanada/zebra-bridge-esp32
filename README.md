@@ -69,6 +69,40 @@ Configure the GX420d serial port to match the bridge defaults:
 - If the printer is set to `^SC...,N` (no flow control), run `set flow none`
   on the bridge console as well.
 
+## Configuration file
+
+Settings live in `bridge.ini` at the project root. Copy the example, edit it,
+and flash — no console commands are required:
+
+```sh
+cp bridge.ini.example bridge.ini
+$EDITOR bridge.ini
+pio run -e esp32dev -t upload
+```
+
+`bridge.ini` is git-ignored. `[bridge]` applies to every board; an optional
+`[esp32dev]` or `[esp32c3]` section overrides it for that environment only.
+Only keys present in the file override the defaults in `include/board_config.h`.
+The format is INI/UTF-8 and `;` or `#` starts a comment. Each bridge needs a
+unique `name` and `serial` so clients can tell devices apart.
+
+For several bridges, keep one file per device and choose it with `ZB_CONFIG`
+(a path relative to the project root, or absolute):
+
+```sh
+ZB_CONFIG=configs/lobby.ini pio run -e esp32c3 -t upload
+```
+
+If `ZB_CONFIG` is set, that file must exist. Without it, a missing
+`bridge.ini` simply means "use the board defaults" (one notice line is printed
+during the build).
+
+Precedence is: board defaults < config file < console `set` changes made after
+that flash. The build tool hashes the resolved configuration and stores the
+hash in NVS. Flashing a file whose settings changed clears the saved console
+changes; flashing the same file again keeps them. `pio run -t erase` wipes NVS
+completely, including the hash.
+
 ## Build and flash
 
 PlatformIO is required. The repository `.gitignore` excludes `.venv` and
