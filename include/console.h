@@ -16,6 +16,7 @@ constexpr std::size_t kMaxSerialLength = 32;
 enum class Target : std::uint8_t {
   Esp32 = 0,
   Esp32C3 = 1,
+  Esp32S3 = 2,
 };
 
 enum class Command : std::uint8_t {

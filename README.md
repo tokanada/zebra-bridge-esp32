@@ -18,11 +18,16 @@ BLE client <--notify-- ESP32 BLE <--XON/XOFF filter-- UART RX <-- MAX3232 <--
 | --- | --- | --- | --- | --- | --- | --- |
 | `esp32dev` | ESP32-WROOM-32 DevKit | UART2 (`Serial2`) | GPIO17 | GPIO16 | -1 (off) | GPIO2, active high |
 | `esp32c3` | ESP32-C3 DevKitM-1 / SuperMini | UART1 (`Serial1`) | GPIO5 | GPIO4 | -1 (off) | GPIO8, active low |
+| `esp32s3` | ESP32-S3 DevKitC-1 / SuperMini | USB host (native OTG) | GPIO19 (D-) | GPIO20 (D+) | n/a | GPIO48 (WS2812) |
 
 The ESP32-C3 console is the native USB CDC serial port
 (`ARDUINO_USB_MODE=1`, `ARDUINO_USB_CDC_ON_BOOT=1`). Never point the printer
 UART at UART0 / GPIO20 / GPIO21 on the C3: the ROM bootloader prints there at
 reset and the printer would receive garbage.
+
+The ESP32-S3 build uses the native USB OTG peripheral as a USB **host** and
+talks to the printer's USB-B port directly, with no UART or MAX3232 in the
+path. See [ESP32-S3 (USB printer)](#esp32-s3-usb-printer).
 
 ## BLE profile
 
@@ -60,6 +65,41 @@ Optional hardware flow control (CTS): wire the printer's RTS/CTS as required
 for your adapter, set a CTS GPIO with `set cts <gpio>` and `set flow cts`.
 The current board defaults leave CTS disabled and use XON/XOFF.
 
+## ESP32-S3 (USB printer)
+
+Build and flash with the ESP32-S3 env:
+
+```sh
+pio run -e esp32s3 -t upload
+```
+
+The ESP32-S3's native USB OTG peripheral is the printer port: the board acts
+as a USB host. Wire it straight to the GX420d's USB-B socket:
+
+| ESP32-S3 | USB-B pin | Signal | Wire colour |
+| --- | --- | --- | --- |
+| 5V | 1 | VBUS | red |
+| GPIO19 | 2 | D- | white |
+| GPIO20 | 3 | D+ | green |
+| GND | 4 | GND | black |
+
+Keep the D+ / D- wires short and twisted together.
+
+Because the S3's own USB port is now the host port, the console and logs are
+on UART0: GPIO43 (TX) and GPIO44 (RX) at 115200 baud, through a **3.3 V**
+USB-UART adapter.
+
+Flashing and power:
+
+- Flash with the printer disconnected: hold BOOT and plug in the USB-C cable.
+- When the printer is connected, power the board from its 5V pin with the
+  USB-C cable unplugged, so the S3's USB port stays dedicated to the printer.
+- The status LED is the onboard WS2812 on GPIO48. A short 100 ms blink every
+  2 s means no printer is attached; solid on means a BLE client is connected.
+- `baud`, `flow`, `tx`, `rx`, and `cts` are ignored on this build; USB bulk
+  transfers NAK while the printer is busy, so no flow control is needed. Only
+  `led`, `log`, `name`, and `serial` matter.
+
 ## Printer setup
 
 Configure the GX420d serial port to match the bridge defaults:
@@ -81,8 +121,9 @@ pio run -e esp32dev -t upload
 ```
 
 `bridge.ini` is git-ignored. `[bridge]` applies to every board; an optional
-`[esp32dev]` or `[esp32c3]` section overrides it for that environment only.
-Only keys present in the file override the defaults in `include/board_config.h`.
+`[esp32dev]`, `[esp32c3]`, or `[esp32s3]` section overrides it for that
+environment only. Only keys present in the file override the defaults in
+`include/board_config.h`.
 The format is INI/UTF-8 and `;` or `#` starts a comment. Each bridge needs a
 unique `name` and `serial` so clients can tell devices apart.
 
@@ -119,6 +160,9 @@ pio run -e esp32dev -t upload
 # ESP32-C3 (native USB)
 pio run -e esp32c3 -t upload
 
+# ESP32-S3 (USB host printer)
+pio run -e esp32s3 -t upload
+
 # Open the serial console
 pio device monitor -b 115200
 ```
@@ -138,7 +182,8 @@ pio test -e native
 
 The console is line based at 115200 baud, case-insensitive, accepts `CR`,
 `LF`, or `CRLF`, and limits input lines to 128 characters. On the C3 use the
-USB CDC port.
+USB CDC port; on the S3 use UART0 GPIO43/GPIO44 through a 3.3 V USB-UART
+adapter (the native USB port is the printer host port).
 
 | Command | Description |
 | --- | --- |
@@ -173,6 +218,10 @@ stored configuration.
 | Slow blink (1 s) | Advertising, no client connected |
 | Solid on | Client connected |
 | Brief off flicker | Data is being forwarded to the printer |
+| Short blink (100 ms every 2 s) | ESP32-S3 USB build: no printer attached (while disconnected) |
+
+On the `esp32s3` build the LED is the onboard WS2812 on GPIO48 and `ledlow`
+has no effect.
 
 ## Troubleshooting
 
@@ -206,6 +255,15 @@ translation.
 **Cannot flash the ESP32-C3.** Use the USB-C port wired to the native USB
 peripheral, not a UART bridge. If needed, hold BOOT while resetting, then
 upload. The console appears as a USB CDC device.
+
+**S3 build: the printer is not detected.** `show` reports
+`printer: usb not attached`. Check the four wires to the USB-B plug (5V, D-,
+D+, GND), that the printer is powered, and that the cable is a real USB data
+cable. Keep D+/D- short and twisted. D- is GPIO19 and D+ is GPIO20.
+
+**S3 build: no console output.** The console is UART0 on GPIO43 (TX) and
+GPIO44 (RX) at 115200; connect a 3.3 V USB-UART adapter. The S3's USB-C port
+is the printer host and does not provide a CDC console on this build.
 
 **No output on the console.** On the `esp32dev` board the console is UART0
 (GPIO1/GPIO3) through the USB-UART bridge; on the C3 it is native USB CDC.

@@ -29,7 +29,7 @@ from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 DEFAULT_NAME = "ZD421-Emulation"
 
-SECTIONS = ("bridge", "esp32dev", "esp32c3")
+SECTIONS = ("bridge", "esp32dev", "esp32c3", "esp32s3")
 
 KEYS = (
     "name",
@@ -44,7 +44,7 @@ KEYS = (
     "log",
 )
 
-KEYS_BY_ENV = ("esp32dev", "esp32c3")
+KEYS_BY_ENV = ("esp32dev", "esp32c3", "esp32s3")
 
 BAUD_RATES = {
     1200,
@@ -88,6 +88,9 @@ ESP32_GPIOS = {
     33,
 }
 ESP32C3_GPIOS = set(range(0, 11)) | {18, 19}
+# ESP32-S3: 19/20 are the native USB OTG host pins, 43/44 the console UART0,
+# and 22-34 do not exist or are used by the SPI flash.
+ESP32S3_GPIOS = set(range(0, 19)) | {21} | set(range(35, 43)) | set(range(45, 49))
 
 MAX_NAME_LENGTH = 29
 MAX_SERIAL_LENGTH = 32
@@ -315,6 +318,8 @@ def _parse_decimal(key: str, value: str, path: str, section: str) -> int:
 def _gpio_allowed(pioenv: str, gpio: int) -> bool:
     if pioenv == "esp32c3":
         return gpio in ESP32C3_GPIOS
+    if pioenv == "esp32s3":
+        return gpio in ESP32S3_GPIOS
     return gpio in ESP32_GPIOS
 
 

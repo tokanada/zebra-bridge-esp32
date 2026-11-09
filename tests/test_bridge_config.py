@@ -99,6 +99,19 @@ def test_env_section_overrides_bridge():
     assert "#define ZB_CFG_BAUD 19200" in header
 
 
+def test_esp32s3_section_and_gpio():
+    text = """
+    [bridge]
+    name = Shared
+    [esp32s3]
+    led = 48
+    """
+    config = build(text, "esp32s3")
+    assert config.overrides["name"] == "Shared"
+    assert config.overrides["led"] == "48"
+    assert "#define ZB_CFG_LED 48" in config.header
+
+
 def test_bom_and_crlf(tmp_path):
     path = tmp_path / "bridge.ini"
     path.write_bytes(
@@ -147,6 +160,12 @@ def test_comments_and_inline_comments():
         ("esp32c3", "bridge", "tx = 20", "tx"),  # ROM UART0
         ("esp32c3", "bridge", "tx = 12", "tx"),  # SPI flash
         ("esp32c3", "esp32c3", "tx = 21", "tx"),
+        ("esp32s3", "bridge", "led = 19", "led"),  # native USB D-
+        ("esp32s3", "bridge", "led = 20", "led"),  # native USB D+
+        ("esp32s3", "bridge", "led = 43", "led"),  # console UART0 TX
+        ("esp32s3", "bridge", "led = 44", "led"),  # console UART0 RX
+        ("esp32s3", "bridge", "tx = 26", "tx"),  # not present / flash
+        ("esp32s3", "esp32s3", "led = 34", "led"),  # not present / flash
     ],
 )
 def test_invalid_values_rejected(pioenv, section, line, key):

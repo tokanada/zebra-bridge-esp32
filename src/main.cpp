@@ -12,7 +12,9 @@
 
 namespace {
 
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+constexpr console::Target kTarget = console::Target::Esp32S3;
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
 constexpr console::Target kTarget = console::Target::Esp32C3;
 #else
 constexpr console::Target kTarget = console::Target::Esp32;
@@ -37,14 +39,23 @@ void setLed(bool on) {
   if (ledPin < 0) {
     return;
   }
+#if ZB_LED_RGB
+  // Onboard WS2812 (ESP32-S3 SuperMini): dim green.
+  neopixelWrite(ledPin, 0, on ? 24 : 0, 0);
+#else
   const bool level = ledActiveLow ? !on : on;
   digitalWrite(ledPin, level ? HIGH : LOW);
+#endif
 }
 
 void updateLed() {
   const std::uint32_t now = millis();
   if (blePrinter.isConnected()) {
     setLed(true);
+  } else if (!printerLink.printerAttached()) {
+    // USB host without a detected printer: 100 ms on every 2 s. No-op on the
+    // UART backend, where printerAttached() is always true.
+    setLed((now % 2000) < 100);
   } else if (blePrinter.isAdvertising()) {
     setLed((now / 1000) % 2 == 0);  // slow blink, 1 s toggle
   } else {
@@ -82,16 +93,19 @@ void printHelp() {
 }
 
 void printConfig() {
+  const char* unused = printerLink.isUsb() ? " (unused: usb)" : "";
   Serial.printf("config source: %s hash 0x%08x\n", buildConfigSource(),
                 static_cast<unsigned>(buildConfigHash()));
   Serial.println("config:");
   Serial.printf("  name:    %s\n", config.name.c_str());
   Serial.printf("  serial:  %s\n", config.serial.c_str());
-  Serial.printf("  baud:    %u\n", static_cast<unsigned>(config.baud));
-  Serial.printf("  flow:    %s\n", console::flowModeName(config.flow));
-  Serial.printf("  tx:      %d\n", config.txPin);
-  Serial.printf("  rx:      %d\n", config.rxPin);
-  Serial.printf("  cts:     %d\n", config.ctsPin);
+  Serial.printf("  baud:    %u%s\n", static_cast<unsigned>(config.baud),
+                unused);
+  Serial.printf("  flow:    %s%s\n", console::flowModeName(config.flow),
+                unused);
+  Serial.printf("  tx:      %d%s\n", config.txPin, unused);
+  Serial.printf("  rx:      %d%s\n", config.rxPin, unused);
+  Serial.printf("  cts:     %d%s\n", config.ctsPin, unused);
   Serial.printf("  led:     %d\n", config.ledPin);
   Serial.printf("  ledlow:  %d\n", config.ledActiveLow ? 1 : 0);
   Serial.printf("  log:     %s\n", console::logLevelName(config.log));
@@ -115,7 +129,21 @@ void printShow() {
   Serial.printf("queue fill: %u / %u\n",
                 static_cast<unsigned>(printerLink.queueFill()),
                 static_cast<unsigned>(printerLink.queueCapacity()));
-  Serial.printf("xoff: %s\n", printerLink.isPaused() ? "yes" : "no");
+  if (printerLink.isUsb()) {
+    if (printerLink.printerAttached()) {
+      Serial.printf("printer: usb attached VID:PID=%04x:%04x\n",
+                    static_cast<unsigned>(printerLink.usbVid()),
+                    static_cast<unsigned>(printerLink.usbPid()));
+    } else {
+      Serial.println("printer: usb not attached");
+    }
+    if (printerLink.deviceId()[0] != '\0') {
+      Serial.printf("printer id: %s\n", printerLink.deviceId());
+    }
+    Serial.println("xoff: n/a");
+  } else {
+    Serial.printf("xoff: %s\n", printerLink.isPaused() ? "yes" : "no");
+  }
   Serial.printf("writes: %lu\n",
                 static_cast<unsigned long>(printerLink.writeCount()));
   printConfig();
@@ -260,7 +288,9 @@ void setup() {
   ledPin = config.ledPin;
   ledActiveLow = config.ledActiveLow;
   if (ledPin >= 0) {
+#if !ZB_LED_RGB
     pinMode(ledPin, OUTPUT);
+#endif
     setLed(false);
     xTaskCreate(bootLedTask, "led_boot", 2048, nullptr, 1, nullptr);
   }
@@ -268,6 +298,9 @@ void setup() {
   Serial.println();
   Serial.println("zebra-bridge-esp32 starting");
   printConfig();
+  if (printerLink.isUsb()) {
+    Serial.println("printer link: usb host (GPIO19 D-, GPIO20 D+)");
+  }
 
   esp_task_wdt_init(10, true);
 
