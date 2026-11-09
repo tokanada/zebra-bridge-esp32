@@ -1,5 +1,7 @@
 #include "printer_link.h"
 
+#if !ZB_PRINTER_USB
+
 #include <esp_task_wdt.h>
 #include <freertos/stream_buffer.h>
 
@@ -15,6 +17,18 @@ bool addCurrentTaskToWatchdog() {
 }
 
 }  // namespace
+
+bool PrinterLink::isPaused() const { return filter_.paused(); }
+
+bool PrinterLink::isUsb() const { return false; }
+
+bool PrinterLink::printerAttached() const { return true; }
+
+std::uint16_t PrinterLink::usbVid() const { return 0; }
+
+std::uint16_t PrinterLink::usbPid() const { return 0; }
+
+const char* PrinterLink::deviceId() const { return ""; }
 
 bool PrinterLink::begin(const Config& config) {
   filter_.setEnabled(config.flow == console::FlowMode::XonXoff);
@@ -247,3 +261,5 @@ void PrinterLink::rxTask() {
     }
   }
 }
+
+#endif  // !ZB_PRINTER_USB

@@ -164,6 +164,23 @@ void test_gpio_per_target() {
                     static_cast<int>(parse("set tx 21", Target::Esp32C3).command));
   TEST_ASSERT_EQUAL(static_cast<int>(Command::Invalid),
                     static_cast<int>(parse("set tx 12", Target::Esp32C3).command));
+
+  // S3 USB build: GPIO48 (onboard WS2812) is valid; GPIO19/20 (USB), 43/44
+  // (console UART0) and 26 (not present / flash) are not.
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::SetLed),
+                    static_cast<int>(parse("set led 48", Target::Esp32S3).command));
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::Invalid),
+                    static_cast<int>(parse("set led 19", Target::Esp32S3).command));
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::Invalid),
+                    static_cast<int>(parse("set led 20", Target::Esp32S3).command));
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::Invalid),
+                    static_cast<int>(parse("set led 43", Target::Esp32S3).command));
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::Invalid),
+                    static_cast<int>(parse("set led 44", Target::Esp32S3).command));
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::Invalid),
+                    static_cast<int>(parse("set tx 26", Target::Esp32S3).command));
+  TEST_ASSERT_EQUAL(static_cast<int>(Command::SetTx),
+                    static_cast<int>(parse("set tx 21", Target::Esp32S3).command));
 }
 
 void test_line_terminators() {

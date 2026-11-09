@@ -3,7 +3,8 @@
 ESP32 port of [zebra-bridge](../../zebra-bridge) (Raspberry Pi, BlueZ). The ESP32
 emulates a Zebra **ZD421** Bluetooth LE printer so the Rock RMS Check-in iPad
 app can print, and forwards the raw ZPL bytes over **RS-232** (via a MAX3232
-level-shifter board) to a Zebra **GX420d**.
+level-shifter board) to a Zebra **GX420d**. The ESP32-S3 build sends the same
+bytes over its native USB host port instead.
 
 No pairing, no bonding, no Bluetooth Classic SPP.
 
@@ -13,15 +14,20 @@ No pairing, no bonding, no Bluetooth Classic SPP.
 | --- | --- | --- | --- | --- | --- | --- |
 | `esp32dev` | ESP32-WROOM-32 DevKit | UART2 (`Serial2`) | GPIO17 | GPIO16 | -1 (off) | GPIO2, active high |
 | `esp32c3` | ESP32-C3 DevKitM-1 / SuperMini | UART1 (`Serial1`) | GPIO5 | GPIO4 | -1 (off) | GPIO8, active low |
+| `esp32s3` | ESP32-S3 DevKitC-1 / SuperMini | USB host (native OTG) | GPIO19 (D-) | GPIO20 (D+) | n/a | GPIO48 (WS2812) |
 
 Notes:
 - The USB console is `Serial` (UART0 on WROOM; native USB-CDC on C3 with
   `ARDUINO_USB_CDC_ON_BOOT=1`). Never use UART0 / GPIO20/21 on the C3 for the
   printer: the ROM bootloader prints to them at reset and the printer would
   receive garbage.
+- On the S3 the native USB peripheral is the **host** port wired to the
+  printer. `ARDUINO_USB_CDC_ON_BOOT=0` leaves `Serial` on UART0 (GPIO43 TX /
+  GPIO44 RX) for the console, and `ZB_PRINTER_USB=1` selects the USB backend.
+  The LED is the onboard WS2812 (`ZB_LED_RGB=1`, `neopixelWrite`).
 - Pins are compile-time defaults in `include/board_config.h`, selected with
-  `#if CONFIG_IDF_TARGET_ESP32C3` / `#else`, and each can be overridden at
-  runtime through the console (stored in NVS).
+  `#if CONFIG_IDF_TARGET_ESP32C3` / `CONFIG_IDF_TARGET_ESP32S3` / `#else`, and
+  each can be overridden at runtime through the console (stored in NVS).
 
 ## BLE profile (must match the Pi bridge byte-for-byte)
 
@@ -77,13 +83,86 @@ GX420d TX --> MAX3232 --> printer RX task --> XON/XOFF filter --> notify
 - Serial format: configurable baud (default 9600), 8N1. Flow control modes:
   `none`, `xonxoff` (default), `cts`.
 
+On the ESP32-S3 the path is USB instead of UART:
+
+```
+BLE onWrite --> 32 KiB StreamBuffer --> printer_tx --> bulk OUT (4 KiB) --> GX420d
+GX420d --> bulk IN (MPS) --> notify (no XON/XOFF filter)
+```
+
+The stream buffer and back-pressure rules are identical. USB ignores `flow`:
+bulk transfers simply NAK while the printer is busy. While no printer is
+attached the TX task leaves queued data in the buffer, so the same 15 s
+back-pressure/drop behaviour applies once it fills.
+
+## USB host backend (ESP32-S3)
+
+`src/usb_printer_link.cpp` implements the same `PrinterLink` API with
+`ZB_PRINTER_USB=1`; `src/printer_link.cpp` is compiled empty and vice versa on
+the other targets. The class keeps the shared StreamBuffer, XON/XOFF filter
+object (unused on USB), callback, activity flag, and counters; only the
+transport-specific members are selected with `#if ZB_PRINTER_USB` in
+`src/printer_link.h`.
+
+Tasks:
+
+- `usb_lib` (4 KiB stack, priority 5) installs the host stack with
+  `usb_host_install({skip_phy_setup=false, intr_flags=ESP_INTR_FLAG_LEVEL1})`,
+  signals `begin()`, then runs `usb_host_lib_handle_events(portMAX_DELAY)` and
+  calls `usb_host_device_free_all()` when the last client goes away.
+- `usb_client` (4 KiB, priority 5) registers an **asynchronous** client
+  (5 event messages) and loops on `usb_host_client_handle_events()`. The event
+  callback only records NEW_DEV / DEV_GONE; it never blocks or submits
+  transfers. After each event-loop return the task processes the pending
+  flags.
+- `printer_tx` (4 KiB, priority 4) owns one 4096-byte bulk OUT transfer,
+  allocated once at task start.
+
+Printer discovery (`processNewDevice`): open the device, read the device
+descriptor for VID/PID, walk the active configuration descriptor by raw
+`bLength`/`bDescriptorType`, and find the first interface with
+`bInterfaceClass == 0x07` (printer). Inside it, take the first bulk OUT
+endpoint (and the first bulk IN, if any) plus their `wMaxPacketSize`. A device
+without a printer interface or without a bulk OUT endpoint is logged as
+`usb: device VID:PID is not a printer` and closed. Otherwise the interface is
+claimed and a best-effort IEEE 1284 `GET_DEVICE_ID` control transfer is issued
+(`bmRequestType 0xA1`, `bRequest 0`, `wValue 0`, `wIndex = (intf << 8) | alt`,
+`wLength 248`, total 256 bytes). The 2-byte big-endian length prefix is
+stripped and the remainder is stored NUL-terminated in `deviceId_`.
+
+Because transfer completion callbacks are dispatched by
+`usb_host_client_handle_events()` on the client task itself, the client task
+pumps that function with a 20 ms timeout while waiting for the control
+transfer (up to 1 s). Blocking on a semaphore there would deadlock.
+
+Attach/detach: on success the backend logs
+`usb: printer attached VID:PID=...` plus `usb: id ...` and starts RX. On
+`USB_HOST_CLIENT_EVENT_DEV_GONE` it clears `attached_`, pumps events up to
+500 ms per in-flight transfer, releases the interface, closes the device,
+frees the control/RX transfers (the TX transfer is kept for reuse), clears
+VID/PID/device ID, and logs `usb: printer detached`.
+
+Transmit: while `attached_` is false the task sleeps 50 ms and leaves data in
+the stream buffer. Otherwise it receives up to 4096 bytes with a 50 ms timeout,
+submits the bulk OUT transfer, and waits up to 30 s for the completion
+semaphore (the printer may NAK for a long time while printing). A status other
+than `COMPLETED`, a submit failure, or a 30 s timeout is logged and the chunk
+is counted as dropped. A timed-out transfer is never reused until its callback
+has fired; the task polls `txInFlight_` in 1 s steps.
+
+Receive: one bulk IN transfer of `wMaxPacketSize` bytes is kept outstanding and
+resubmitted from its callback while attached. `COMPLETED` data goes straight
+to the BLE notify callback with no XON/XOFF filtering; `NO_DEVICE`/`CANCELED`
+ends the loop. A printer with nothing to report simply leaves the IN transfer
+pending until detach.
+
 ## Configuration
 
 Configuration is layered, highest priority last:
 
 1. Compile-time board defaults in `include/board_config.h`, selected by target.
 2. Build-time overrides from `bridge.ini` (`[bridge]`, plus the section named
-   after the PlatformIO env, `[esp32dev]` or `[esp32c3]`).
+   after the PlatformIO env: `[esp32dev]`, `[esp32c3]`, or `[esp32s3]`).
 3. Runtime values saved by the console in NVS (`Preferences`, namespace
    `zbridge`).
 
@@ -123,10 +202,12 @@ resets console changes, re-flashing the same file keeps them, and
 `pio run -t erase` wipes NVS entirely.
 
 Keys: `name`, `serial`, `baud`, `flow`, `tx`, `rx`, `cts`, `led`, `ledlow`,
-`log`. Missing keys fall back to `board_config.h` defaults.
+`log`. Missing keys fall back to `board_config.h` defaults. On `esp32s3`,
+`baud`/`flow`/`tx`/`rx`/`cts` are accepted and validated but unused by the USB
+backend; `led`/`log`/`name`/`serial` apply (`ledlow` is ignored by the RGB LED).
 
-USB console (115200 baud on WROOM), line based, case-insensitive commands,
-CR, LF, or CRLF terminated, max line 128 chars:
+Console (115200 baud: UART0 on WROOM and S3, native USB CDC on C3), line based,
+case-insensitive commands, CR, LF, or CRLF terminated, max line 128 chars:
 
 ```
 help
@@ -149,7 +230,9 @@ pins/baud require a reboot). The parser lives in `src/console.cpp` /
 layer so it can be unit-tested on the host (`pio test -e native`).
 
 Stats in `show`: uptime, connected (y/n) + peer, MTU, bytes received over BLE,
-bytes sent to printer, bytes dropped, queue fill, xoff state, writes count.
+bytes sent to printer, bytes dropped, queue fill, xoff state, writes count. On
+USB the printer line reports attach state, VID/PID, and the IEEE 1284 device
+ID, and `xoff` is `n/a`.
 
 ## Logging
 
@@ -163,6 +246,11 @@ a burst of writes; summarize bytes when 2 s pass without a write).
 - Slow blink (1 s) — advertising, no client.
 - Solid on — client connected.
 - Brief off-flicker on data to printer.
+- Short blink (100 ms every 2 s) — S3 USB build, no printer attached (while
+  disconnected).
+
+On the S3 the LED is the onboard WS2812 on GPIO48, driven by `neopixelWrite`
+(dim green); `ledlow` does not apply.
 
 ## Robustness
 
@@ -183,10 +271,23 @@ The GX420d DB9 is DTE-wired; most MAX3232 DB9 boards are also DTE, so a
 **null-modem** cable/adapter is usually required. Printer serial settings
 must match (`^SC9600,8,N,1,X` or via Zebra Setup Utilities).
 
+On the ESP32-S3 use the printer's USB-B port instead:
+
+| ESP32-S3 | USB-B pin | Signal |
+| --- | --- | --- |
+| 5V | 1 | VBUS |
+| GPIO19 | 2 | D- |
+| GPIO20 | 3 | D+ |
+| GND | 4 | GND |
+
+Keep D+/D- short and twisted together. Flash with the printer disconnected
+(hold BOOT, plug in USB-C); when the printer is connected, power the board
+from its 5V pin with USB-C unplugged.
+
 ## Project layout
 
 ```
-platformio.ini            envs: esp32dev, esp32c3, native (tests only)
+platformio.ini            envs: esp32dev, esp32c3, esp32s3, native (tests only)
 bridge.ini.example        documented template (bridge.ini is git-ignored)
 scripts/bridge_config.py  INI parsing/validation + header generation
 include/board_config.h    per-target defaults
@@ -195,6 +296,7 @@ include/flow_filter.h     pure C++ XON/XOFF filter state machine
 src/main.cpp              setup/loop, LED, health check
 src/ble_printer.cpp/.h    NimBLE GATT server, advertising, callbacks
 src/printer_link.cpp/.h   StreamBuffer, UART, TX/RX tasks, stats
+src/usb_printer_link.cpp  USB host backend for the ESP32-S3 (same class API)
 src/config_store.cpp/.h   Preferences load/save, config hash handling
 src/console.cpp           parser implementation
 src/flow_filter.cpp

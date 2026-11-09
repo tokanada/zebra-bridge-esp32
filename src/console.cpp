@@ -115,6 +115,11 @@ bool gpioAllowed(Target target, int gpio) {
       // GPIO20/21 (UART0) are deliberately rejected: the ROM bootloader
       // prints on them at reset and the printer would see garbage.
       return (gpio >= 0 && gpio <= 10) || (gpio >= 18 && gpio <= 19);
+    case Target::Esp32S3:
+      // GPIO19/20 are the native USB OTG host pins wired to the printer;
+      // GPIO43/44 are the console UART0; GPIO22-34 do not exist or are flash.
+      return (gpio >= 0 && gpio <= 18) || gpio == 21 ||
+             (gpio >= 35 && gpio <= 42) || (gpio >= 45 && gpio <= 48);
     case Target::Esp32:
     default:
       // Output-capable GPIOs on the WROOM-32 module. 6-11 are SPI flash and
