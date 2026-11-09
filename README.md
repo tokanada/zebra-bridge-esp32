@@ -89,6 +89,42 @@ Because the S3's own USB port is now the host port, the console and logs are
 on UART0: GPIO43 (TX) and GPIO44 (RX) at 115200 baud, through a **3.3 V**
 USB-UART adapter.
 
+### Debugging while connected to the printer (default method)
+
+Use an ESP32-WROOM-32 DevKit as the USB-UART adapter: its CP2102/CH340 bridge
+talks to the S3 directly while the WROOM itself is held in reset. No sketch is
+needed on the WROOM.
+
+| WROOM DevKit pin | Connect to |
+| --- | --- |
+| EN | GND on the WROOM (jumper; holds the WROOM in reset) |
+| TX (TX0 / GPIO1) | S3 GPIO43 (TX) |
+| RX (RX0 / GPIO3) | S3 GPIO44 (RX) |
+| GND | S3 GND |
+| 5V / 3V3 | not connected (the S3 is powered from the printer side) |
+
+The wiring is **straight through** (TX to TX, RX to RX) because the DevKit's
+TX/RX labels are the ESP32's pins, and you are talking to the USB bridge behind
+them. Plug the WROOM into the computer and open its port:
+
+```sh
+pio device monitor -b 115200 -p /dev/cu.usbserial-XXXX
+```
+
+Only TX/RX/GND are wired, so the monitor cannot auto-reset the S3; press the
+S3's RST button to see the boot log. Useful commands: `set log debug` (USB
+detail such as GET_DEVICE_ID), `show` (attach state, VID:PID — Zebra is
+`0a5f` — and byte counters), and `test` (queue a ZPL test label without the
+iPad).
+
+The same link can reflash the S3 without unplugging the printer: hold the S3's
+BOOT, tap RST, release BOOT, then
+`pio run -e esp32s3 -t upload --upload-port /dev/cu.usbserial-XXXX` and tap RST
+afterwards.
+
+If output is garbled or missing, swap TX/RX and confirm the EN jumper is in
+place (a booting WROOM collides with the S3's output).
+
 Flashing and power:
 
 - Flash with the printer disconnected: hold BOOT and plug in the USB-C cable.
