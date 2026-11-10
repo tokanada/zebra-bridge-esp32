@@ -55,4 +55,5 @@ class BlePrinter {
   std::uint32_t jobBytes_ = 0;
   std::uint32_t jobWrites_ = 0;
   std::uint32_t lastWriteMs_ = 0;
+  std::uint32_t jobStartMs_ = 0;
 };

@@ -231,7 +231,12 @@ void BlePrinter::handleConnect(NimBLEConnInfo& connInfo) {
   }
 
   if (server_ != nullptr) {
-    server_->updateConnParams(connHandle_, 12, 24, 0, 500);
+    // Ask for a 15 ms interval (12 * 1.25 ms): Apple allows min == max == 15 ms,
+    // and it roughly doubles throughput versus 30 ms so multi-label jobs reach
+    // the printer before the previous label finishes printing. Also request
+    // 251-byte link-layer packets (data length extension).
+    server_->updateConnParams(connHandle_, 12, 12, 0, 500);
+    server_->setDataLen(connHandle_, 251);
   }
 }
 
@@ -272,6 +277,7 @@ void BlePrinter::handleWrite(NimBLECharacteristic* characteristic) {
       jobOpen_ = true;
       jobBytes_ = 0;
       jobWrites_ = 0;
+      jobStartMs_ = millis();
     }
     jobBytes_ += value.size();
     ++jobWrites_;
@@ -289,9 +295,17 @@ void BlePrinter::poll() {
   if (jobOpen_ && millis() - lastWriteMs_ >= 2000) {
     jobOpen_ = false;
     if (logLevel_ >= console::LogLevel::Info) {
-      Serial.printf("job: %u bytes in %u writes\n",
+      const std::uint32_t elapsedMs = lastWriteMs_ - jobStartMs_;
+      const std::uint32_t rate =
+          elapsedMs > 0 ? static_cast<std::uint32_t>(
+                              (static_cast<std::uint64_t>(jobBytes_) * 1000) /
+                              elapsedMs)
+                        : 0;
+      Serial.printf("job: %u bytes in %u writes over %u ms (%u B/s)\n",
                     static_cast<unsigned>(jobBytes_),
-                    static_cast<unsigned>(jobWrites_));
+                    static_cast<unsigned>(jobWrites_),
+                    static_cast<unsigned>(elapsedMs),
+                    static_cast<unsigned>(rate));
     }
   }
 }
