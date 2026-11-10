@@ -74,7 +74,8 @@ pio run -e esp32s3 -t upload
 ```
 
 The ESP32-S3's native USB OTG peripheral is the printer port: the board acts
-as a USB host. Wire it straight to the GX420d's USB-B socket:
+as a USB host on GPIO19 (D-) and GPIO20 (D+). On the DevKitC-1 these pins are
+on the header and can be wired straight to the GX420d's USB-B socket:
 
 | ESP32-S3 | USB-B pin | Signal | Wire colour |
 | --- | --- | --- | --- |
@@ -84,6 +85,30 @@ as a USB host. Wire it straight to the GX420d's USB-B socket:
 | GND | 4 | GND | black |
 
 Keep the D+ / D- wires short and twisted together.
+
+### SuperMini wiring (spliced USB-C to USB-B cable, printer-powered)
+
+The ESP32-S3 SuperMini does not bring GPIO19/20 out to its header; they only
+reach its USB-C connector. Splice a USB 2.0 USB-C cable to a USB-B cable
+(white to white, green to green, black to black) and plug the C end into the
+SuperMini and the B end into the printer. Power comes from the printer's DB9
+serial port instead of the printer's USB VBUS:
+
+| From | To |
+| --- | --- |
+| GX420d DB9 pin 9 (+5 V, 0.75 A fused) | red (+5 V) wire of the spliced cable |
+| GX420d DB9 pin 5 (ground) | black (GND) wire of the spliced cable |
+| USB-B red wire | not connected (insulate it) |
+
+The SuperMini then runs from 5 V on its USB-C VBUS, drawing roughly 50-100 mA,
+well inside the 0.75 A budget that the serial and parallel ports share. Rules:
+
+- Never have the Mac (or any other 5 V source) plugged into the SuperMini
+  while pin 9 is wired. Two 5 V supplies back-feed each other.
+- Use a USB 2.0 cable: the D+/D- pair is all that is needed, and USB 3 cables
+  add pairs that are easy to short while splicing.
+- Insulate each splice separately; a D+/D- to 5 V short can damage both ends.
+- The regulator next to the USB-C runs warm (around 45 °C) in normal use.
 
 Because the S3's own USB port is now the host port, the console and logs are
 on UART0: GPIO43 (TX) and GPIO44 (RX) at 115200 baud, through a **3.3 V**
@@ -127,9 +152,16 @@ place (a booting WROOM collides with the S3's output).
 
 Flashing and power:
 
-- Flash with the printer disconnected: hold BOOT and plug in the USB-C cable.
-- When the printer is connected, power the board from its 5V pin with the
-  USB-C cable unplugged, so the S3's USB port stays dedicated to the printer.
+- After the firmware starts, the S3's USB-C is in host mode and no longer
+  appears as a serial port. To reflash over USB-C, unplug the printer cable
+  and the pin 9 supply, hold BOOT, plug the USB-C into the computer (or tap
+  RST while holding BOOT), release BOOT, then run
+  `pio run -e esp32s3 -t upload`. Press RST afterwards.
+- Each bridge's `name`/`serial` come from `bridge.ini` (gitignored, one per
+  device; start from `bridge.ini.example`). Reflash after changing it.
+- When the printer is connected, power the board from the printer (DB9 pin 9
+  on the SuperMini, or the 5V pin on the DevKitC-1) with nothing else on the
+  USB-C, so the S3's USB port stays dedicated to the printer.
 - The status LED is the onboard WS2812 on GPIO48. A short 100 ms blink every
   2 s means no printer is attached; solid on means a BLE client is connected.
 - `baud`, `flow`, `tx`, `rx`, and `cts` are ignored on this build; USB bulk
@@ -295,7 +327,14 @@ upload. The console appears as a USB CDC device.
 **S3 build: the printer is not detected.** `show` reports
 `printer: usb not attached`. Check the four wires to the USB-B plug (5V, D-,
 D+, GND), that the printer is powered, and that the cable is a real USB data
-cable. Keep D+/D- short and twisted. D- is GPIO19 and D+ is GPIO20.
+cable. Keep D+/D- short and twisted. D- is GPIO19 and D+ is GPIO20. On a
+spliced SuperMini cable, check white-to-white and green-to-green and that the
+pin 9 +5 V reaches the USB-C red wire.
+
+**S3 build: the debug WROOM drops off the computer.** If
+`/dev/cu.usbserial-*` disappears ("Device not configured"), reseat its USB
+cable and make sure nothing connects the WROOM's 5V/VIN or 3V3 to the S3 or the
+printer supply; only TX0, RX0 and GND go to the S3.
 
 **S3 build: no console output.** The console is UART0 on GPIO43 (TX) and
 GPIO44 (RX) at 115200; connect a 3.3 V USB-UART adapter. The S3's USB-C port
